@@ -19,6 +19,9 @@ import datetime
 import importlib
 import sys
 import hashlib
+from rdflib import Graph, URIRef, BNode, Literal, Namespace
+import urllib.parse
+from rdflib.namespace import SKOS, RDF, DC, DCTERMS, RDFS
 
 # set UTF8 as default
 importlib.reload(sys)
