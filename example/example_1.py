@@ -18,7 +18,8 @@ import codecs
 import datetime
 import importlib  # py3
 import sys
-from rdflib import Graph
+from rdflib import Graph, Namespace
+from rdflib.namespace import FOAF
 
 # set UTF8 as default
 importlib.reload(sys)  # py3
@@ -111,7 +112,11 @@ for x in range(1, int(files) + 1):
     file.close()
 
 # format rdf to nice turtle
+EX = Namespace("http://example.org/")
 g = Graph()
+
+g.bind("foaf", FOAF)  # bind an RDFLib-provided namespace to a prefix
+g.bind("ex", EX)      # bind a user-declared namespace to a prefix
 filename_tmp = dir_path.replace("\\py", "\\ttl") + "\\" + "loc_productioncentre_1.ttl"
 g.parse(filename_tmp)
 g.serialize(destination=filename_tmp)
