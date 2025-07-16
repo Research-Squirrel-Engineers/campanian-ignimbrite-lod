@@ -6,254 +6,218 @@ __version__ = "beta"
 __maintainer__ = "Florian Thiery"
 __email__ = "mail@fthiery.de"
 __status__ = "beta"
-__update__ = "2023-08-14"
+__update__ = "2025-07-16"
 
-# import dependencies
-import uuid
-import requests
-import io
 import pandas as pd
 import os
-import codecs
 import datetime
-import importlib
-import sys
-import hashlib
-from rdflib import Graph, URIRef, BNode, Literal, Namespace
-import urllib.parse
-from rdflib.namespace import SKOS, RDF, DC, DCTERMS, RDFS
+from rdflib import Graph, URIRef, Literal, Namespace
+from rdflib.namespace import RDF, RDFS, SKOS, FOAF, PROV, XSD, DCTERMS
+from rdflib.namespace import Namespace as NS
 
-# set UTF8 as default
-importlib.reload(sys)
+# Define namespaces
+GEOSPARQL = NS("http://www.opengis.net/ont/geosparql#")
+SF = NS("http://www.opengis.net/ont/sf#")
+PLEIADES = NS("https://pleiades.stoa.org/places/vocab#")
+FSL = NS("http://fuzzy-sl.squirrel.link/ontology/")
+FSLD = NS("http://fuzzy-sl.squirrel.link/data/")
 
-# set starttime
-starttime = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-lines = []
+def create_graph():
+    """Initialize RDF graph with namespace bindings"""
+    g = Graph()
+    
+    # Bind namespaces
+    g.bind("rdf", RDF)
+    g.bind("rdfs", RDFS)
+    g.bind("skos", SKOS)
+    g.bind("foaf", FOAF)
+    g.bind("prov", PROV)
+    g.bind("xsd", XSD)
+    g.bind("dct", DCTERMS)
+    g.bind("geosparql", GEOSPARQL)
+    g.bind("sf", SF)
+    g.bind("pleiades", PLEIADES)
+    g.bind("fsl", FSL)
+    g.bind("fsld", FSLD)
+    
+    return g
 
-# set paths I
-file_name = "cifindspots_part_full.csv"
-dir_path = os.path.dirname(os.path.realpath(__file__))
-file_in = dir_path.replace("\\py", "\\csv") + "\\" + file_name
+def add_site_triples(g, row, starttime):
+    """Add all site-related triples to graph including agents, activities, and geometry"""
+    site_uri = FSLD[f"cisite_{row['id']}"]
+    
+    # Basic typing
+    g.add((site_uri, RDF.type, FSL.Site))
+    g.add((site_uri, RDF.type, PROV.Entity))
+    g.add((site_uri, RDF.type, PLEIADES.Place))
+    g.add((site_uri, FSL.partOf, FSL.CampanianIgnimbriteProject))
+    g.add((site_uri, FSL.siteType, FSL.ArchaeologicalSite))
+    
+    # Labels and descriptions
+    g.add((site_uri, RDFS.label, Literal(row['label'], lang="en")))
+    g.add((site_uri, SKOS.prefLabel, Literal(row['label'], lang="en")))
+    
+    if not pd.isna(row['desc']):
+        g.add((site_uri, SKOS.scopeNote, Literal(row['desc'], lang="en")))
+        g.add((site_uri, RDFS.comment, Literal(row['desc'], lang="en")))
+    
+    # Certainty
+    g.add((site_uri, FSL.certaintyLevel, Literal(row['certainty'])))
+    g.add((site_uri, FSL.certaintyDesc, Literal(row['certaintyinfo'], lang="en")))
+    
+    # Relations
+    if not pd.isna(row['relatedto']):
+        relations = str(row['relatedto']).split(";")
+        for relation in relations:
+            g.add((site_uri, URIRef(row['relatedtohow']), URIRef(relation)))
+    
+    # Spatial types
+    if not pd.isna(row['spatialtype']):
+        spatial_types = str(row['spatialtype']).split(";")
+        for spatial_type in spatial_types:
+            g.add((site_uri, FSL.spatialType, URIRef(spatial_type)))
+    
+    # Literature
+    if not pd.isna(row['literature']):
+        literature = str(row['literature']).split(";")
+        for lit in literature:
+            g.add((site_uri, FSL.hasReference, Literal(lit)))
+    
+    # Geometry
+    geom_uri = URIRef(str(site_uri) + "_geom")
+    g.add((site_uri, GEOSPARQL.hasGeometry, geom_uri))
+    g.add((geom_uri, RDF.type, SF.Point))
+    
+    # WKT Literal
+    wkt_literal = Literal(f"<http://www.opengis.net/def/crs/EPSG/0/4326> {row['wkt']}", 
+                         datatype=GEOSPARQL.wktLiteral)
+    g.add((geom_uri, GEOSPARQL.asWKT, wkt_literal))
+    
+    # Certainty for geometry
+    g.add((geom_uri, FSL.certaintyLevel, Literal(row['certainty'])))
+    g.add((geom_uri, FSL.certaintyDesc, Literal(row['certaintyinfo'], lang="en")))
+    
+    # Add agent triples
+    if not pd.isna(row['agent']):
+        agents = str(row['agent']).split(";")
+        for agent_url in agents:
+            agent_id = agent_url.replace("http://orcid.org/", "")
+            agent_uri = FSLD[f"agent_{agent_id}"]
+            
+            g.add((agent_uri, RDF.type, FOAF.Person))
+            g.add((agent_uri, RDF.type, PROV.Agent))
+            g.add((agent_uri, SKOS.exactMatch, URIRef(agent_url)))
+    
+    # Add activity triples
+    activity_uri = FSLD[f"cisite_{row['id']}_activity"]
+    
+    # Basic typing
+    g.add((activity_uri, RDF.type, PROV.Activity))
+    g.add((activity_uri, RDF.type, URIRef(row['methodtype'])))
+    
+    # Timestamps
+    start_time = Literal(starttime, datatype=XSD.dateTime)
+    end_time = Literal(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), 
+                      datatype=XSD.dateTime)
+    g.add((activity_uri, PROV.startedAtTime, start_time))
+    g.add((activity_uri, PROV.endedAtTime, end_time))
+    
+    # Activity data
+    g.add((activity_uri, FSL.hasSource, URIRef(row['source'])))
+    g.add((activity_uri, FSL.hasSourceType, URIRef(row['sourcetype'])))
+    g.add((activity_uri, FSL.activityDesc, Literal(row['methoddesc'], lang="en")))
+    g.add((activity_uri, FSL.certaintyLevel, Literal(row['certainty'])))
+    g.add((activity_uri, FSL.certaintyDesc, Literal(row['certaintyinfo'], lang="en")))
+    
+    # Literature references for activity
+    if not pd.isna(row['literature']):
+        literature = str(row['literature']).split(";")
+        for lit in literature:
+            g.add((activity_uri, FSL.hasReference, Literal(lit)))
+    
+    # Images
+    if not pd.isna(row['relatedto']):
+        relations = str(row['relatedto']).split(";")
+        for relation in relations:
+            if "png" in relation or "jpg" in relation:
+                g.add((activity_uri, FSL.image, URIRef(relation)))
+    
+    # PROV-O relationships
+    g.add((site_uri, PROV.wasGeneratedBy, activity_uri))
+    g.add((activity_uri, PROV.used, site_uri))
+    
+    # Agent associations
+    if not pd.isna(row['agent']):
+        agents = str(row['agent']).split(";")
+        for agent_url in agents:
+            g.add((site_uri, PROV.wasAttributedTo, URIRef(agent_url)))
+            g.add((activity_uri, PROV.wasAssociatedWith, URIRef(agent_url)))
+    
+    return site_uri
 
-# read csv file
-data = pd.read_csv(
-    file_in,
-    encoding='utf-8',
-    sep=',',
-    usecols=['id', 'label', 'desc', 'certainty', 'certaintyinfo', 'relatedto', 'relatedtohow', 'source',
-             'sourcetype', 'spatialtype', 'methodtype', 'agent', 'methoddesc', 'literature', 'wkt'],
-    na_values=['.', '??', 'NULL']  # take any '.' or '??' values as NA
-)
-print("*****************************************")
-print(data.info())
+def add_provenance(g, row, site_uri, starttime):
+    """Add provenance triples including license and script provenance"""
+    # License
+    g.add((site_uri, DCTERMS.license, URIRef("https://creativecommons.org/licenses/by/4.0/")))
+    g.add((site_uri, DCTERMS.creator, URIRef("https://orcid.org/0000-0002-3246-3531")))
+    g.add((site_uri, DCTERMS.creator, URIRef("https://orcid.org/0000-0003-1100-6494")))
+    g.add((site_uri, DCTERMS.rightsHolder, URIRef("https://orcid.org/0000-0002-3246-3531")))
+    g.add((site_uri, DCTERMS.rightsHolder, URIRef("https://orcid.org/0000-0003-1100-6494")))
+    
+    # General provenance
+    g.add((site_uri, PROV.wasDerivedFrom, URIRef("https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo")))
+    
+    # PROV-O for script
+    script_uri = FSLD[f"cisite_{row['id']}_pyscript"]
+    
+    g.add((site_uri, PROV.wasAttributedTo, URIRef("https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo/blob/main/py/CI.py")))
+    g.add((site_uri, PROV.wasDerivedFrom, URIRef("https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo")))
+    g.add((site_uri, PROV.wasGeneratedBy, script_uri))
+    
+    g.add((script_uri, RDF.type, PROV.Activity))
+    g.add((script_uri, PROV.startedAtTime, Literal(starttime, datatype=XSD.dateTime)))
+    g.add((script_uri, PROV.endedAtTime, Literal(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), datatype=XSD.dateTime)))
+    g.add((script_uri, PROV.wasAssociatedWith, URIRef("https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo/blob/main/py/CI.py")))
 
-# create triples from dataframe
-lineNo = 2
-for index, row in data.iterrows():
-    tmpno = lineNo - 2
-    lineNo += 1
+def main():
+    # Set starttime
+    starttime = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    
+    # Set paths
+    file_name = "cifindspots_part_full.csv"
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    file_in = dir_path.replace("\\py", "\\data") + "\\" + file_name
+    
+    # Read CSV file
+    data = pd.read_csv(
+        file_in,
+        encoding='utf-8',
+        sep=',',
+        usecols=['id', 'label', 'desc', 'certainty', 'certaintyinfo', 'relatedto', 'relatedtohow', 'source',
+                 'sourcetype', 'spatialtype', 'methodtype', 'agent', 'methoddesc', 'literature', 'wkt'],
+        na_values=['.', '??', 'NULL']
+    )
+    
+    print("*****************************************")
+    print(data.info())
+    
+    # Create RDF graph
+    g = create_graph()
+    
+    # Process each row
+    for index, row in data.iterrows():
+        # Add site triples (includes agents, activities, and geometry)
+        site_uri = add_site_triples(g, row, starttime)
+        
+        # Add provenance (includes license and script provenance)
+        add_provenance(g, row, site_uri, starttime)
+    
+    # Write output file
+    output_file = dir_path.replace("\\py", "\\rdf") + "\\ci_full.ttl"
+    g.serialize(destination=output_file, format='turtle')
+    
+    print(f"SUCCESS: Generated {len(g)} triples in {output_file}")
+    print("*****************************************")
 
-    # agent
-    agent = str(row['agent'])
-    agents = agent.split(";")
-    for i in agents:
-        tmp_agent_id = i.replace("http://orcid.org/", "")
-        lines.append("fsld:agent_" + tmp_agent_id +
-                     " " + "rdf:type" + " foaf:Person .")
-        lines.append("fsld:agent_" + tmp_agent_id +
-                     " " + "rdf:type" + " prov:Agent .")
-        lines.append("fsld:agent_" + tmp_agent_id +
-                     " " + "skos:exactMatch" + " <" + i + ">.")
-
-    # entity (site)
-    # typing
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "rdf:type" + " fsl:Site .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "rdf:type" + " prov:Entity .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "rdf:type" + " pleiades:Place .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "fsl:partOf" + " fsl:CampanianIgnimbriteProject .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "fsl:siteType" + " fsl:ArchaeologicalSite .")
-    # metadata
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "rdfs:label" + " '" + str(row['label']) + "'@en.")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "skos:prefLabel" + " '" + str(row['label']) + "'@en.")
-    if str(row['desc']) != 'nan':
-        lines.append("fsld:cisite_" +
-                     str(row['id']) + " " + "skos:scopeNote" + " '" + str(row['desc']) + "'@en.")
-        lines.append("fsld:cisite_" +
-                     str(row['id']) + " " + "rdfs:comment" + " '" + str(row['desc']) + "'@en.")
-    lines.append("fsld:cisite_" + str(row['id']) + " " +
-                 "prov:wasDerivedFrom" + " <https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo> .")
-    # certainty
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "fsl:certaintyLevel" + " " + str(row['certainty']) + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + " " + "fsl:certaintyDesc" + " '" + str(row['certaintyinfo']) + "'@en.")
-    # relations
-    relatedto = str(row['relatedto'])
-    relatedtos = relatedto.split(";")
-    for i in relatedtos:
-        lines.append("fsld:cisite_" + str(row['id']) +
-                     " " + str(row['relatedtohow']) + " <" + i + ">.")
-    spatialtype = str(row['spatialtype'])
-    spatialtypes = spatialtype.split(";")
-    for i in spatialtypes:
-        lines.append("fsld:cisite_" +
-                     str(row['id']) + " " + "fsl:spatialType" + " " + i + ".")
-    # literature
-    if str(row['literature']) != 'nan':
-        lit = str(row['literature'])
-        lits = lit.split(";")
-        for i in lits:
-            lines.append("fsld:cisite_" +
-                         str(row['id']) + " " + "fsl:hasReference" + " '" + i + "'.")
-
-    # site geometry
-    point = str(row['wkt'])
-    point = "\"<http://www.opengis.net/def/crs/EPSG/0/4326> " + \
-        point + "\"^^geosparql:wktLiteral"
-    lines.append("fsld:cisite_" + str(row['id']) + " " +
-                 "geosparql:hasGeometry" + " fsld:cisite_" + str(row['id']) + "_geom .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_geom " + "rdf:type" + " sf:Point .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_geom " + "geosparql:asWKT " + point + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_geom " + "fsl:certaintyLevel" + " " + str(row['certainty']) + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_geom " + "fsl:certaintyDesc" + " '" + str(row['certaintyinfo']) + "'@en.")
-
-    # activity
-    # metadata
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "rdf:type" + " prov:Activity .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "rdf:type" + " " + str(row['methodtype']) + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "prov:startedAtTime '" + starttime + "'^^xsd:dateTime .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "prov:endedAtTime '" +
-                 datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ") + "'^^xsd:dateTime .")
-    # activity data
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "fsl:hasSource" + " " + str(row['source']) + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "fsl:hasSourceType" + " " + str(row['sourcetype']) + ".")
-    if str(row['literature']) != 'nan':
-        for i in lits:
-            lines.append(
-                "fsld:cisite_" + str(row['id']) + "_activity " + "fsl:hasReference" + " '" + i + "'.")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "fsl:activityDesc" + " '" + str(row['methoddesc']) + "'@en.")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "fsl:certaintyLevel" + " " + str(row['certainty']) + ".")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "fsl:certaintyDesc" + " '" + str(row['certaintyinfo']) + "'@en.")
-
-    # image?
-    if str(row['relatedto']) != 'nan':
-        for i in relatedtos:
-            if "png" in i:
-                lines.append("fsld:cisite_" +
-                             str(row['id']) + "_activity " + "fsl:image" + " <" + i + ">.")
-            if "jpg" in i:
-                lines.append("fsld:cisite_" +
-                             str(row['id']) + "_activity " + "fsl:image" + " <" + i + ">.")
-
-    # prov-o model
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "prov:wasGeneratedBy" +
-                 " " + "fsld:cisite_" + str(row['id']) + "_activity.")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_activity " + "prov:used " + "fsld:cisite_" + str(row['id']) + ".")
-    for i in agents:
-        lines.append(
-            "fsld:cisite_" + str(row['id']) + " " + "prov:wasAttributedTo" + " <" + i + ">.")
-        lines.append(
-            "fsld:cisite_" + str(row['id']) + "_activity " + "prov:wasAssociatedWith" + " <" + i + ">.")
-
-    # license
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "dct:license" +
-                 " <" + "https://creativecommons.org/licenses/by/4.0/" + "> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "dct:creator" +
-                 " <" + "https://orcid.org/0000-0002-3246-3531" + "> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "dct:creator" +
-                 " <" + "https://orcid.org/0000-0003-1100-6494" + "> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "dct:rightsHolder" +
-                 " <" + "https://orcid.org/0000-0002-3246-3531" + "> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " + "dct:rightsHolder" +
-                 " <" + "https://orcid.org/0000-0003-1100-6494" + "> .")
-
-    # prov-o for script
-    lines.append("fsld:cisite_" + str(row['id']) + " " +
-                 "prov:wasAttributedTo" + " <https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo/blob/main/py/CI.py> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " +
-                 "prov:wasDerivedFrom" + " <https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo> .")
-    lines.append("fsld:cisite_" + str(row['id']) + " " +
-                 "prov:wasGeneratedBy" + " fsld:cisite_" + str(row['id']) + "_pyscript .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_pyscript " + "rdf:type" + " <http://www.w3.org/ns/prov#Activity> .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_pyscript " + "prov:startedAtTime '" + starttime + "'^^xsd:dateTime .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_pyscript " + "prov:endedAtTime '" +
-                 datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ") + "'^^xsd:dateTime .")
-    lines.append("fsld:cisite_" +
-                 str(row['id']) + "_pyscript " + "prov:wasAssociatedWith" + " <https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo/blob/main/py/CI.py> .")
-
-    lines.append("")
-
-files = (len(lines) / 100000) + 1
-print("triples", len(lines), "files", int(files))
-thiscount = len(lines)
-
-# write output files
-f = 0
-step = 100000
-prefixes = ""
-prefixes += "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\r\n"
-prefixes += "@prefix owl: <http://www.w3.org/2002/07/owl#> .\r\n"
-prefixes += "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\r\n"
-prefixes += "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\r\n"
-prefixes += "@prefix geosparql: <http://www.opengis.net/ont/geosparql#> .\r\n"
-prefixes += "@prefix dc: <http://purl.org/dc/elements/1.1/> .\r\n"
-prefixes += "@prefix dct: <http://purl.org/dc/terms/> .\r\n"
-prefixes += "@prefix sf: <http://www.opengis.net/ont/sf#> .\r\n"
-prefixes += "@prefix prov: <http://www.w3.org/ns/prov#> .\r\n"
-prefixes += "@prefix foaf: <http://xmlns.com/foaf/0.1/> .\r\n"
-prefixes += "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\r\n"
-prefixes += "@prefix pleiades: <https://pleiades.stoa.org/places/vocab#> .\r\n"
-prefixes += "@prefix wikidata: <http://wikidata.org/entity/> .\r\n"
-prefixes += "@prefix osmn: <http://openopenstreetmap.org/node/> .\r\n"
-prefixes += "@prefix osmr: <http://openopenstreetmap.org/relation/> .\r\n"
-prefixes += "@prefix osmw: <http://openopenstreetmap.org/way/> .\r\n"
-prefixes += "@prefix fsl: <http://fuzzy-sl.squirrel.link/ontology/> .\r\n"
-prefixes += "@prefix fsld: <http://fuzzy-sl.squirrel.link/data/> .\r\n"
-prefixes += "\r\n"
-
-for x in range(1, int(files) + 1):
-    strX = str(x)
-    filename = dir_path.replace("\\py", "\\rdf") + \
-        "\\" + "ci_full.ttl"
-    file = codecs.open(filename, "w", "utf-8")
-    file.write(
-        "# create triples from https://github.com/Research-Squirrel-Engineers/campanian-ignimbrite-geo \r\n")
-    file.write(
-        "# on " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + "\r\n\r\n")
-    file.write(prefixes)
-    i = f
-    for i, line in enumerate(lines):
-        if (i > f - 1 and i < f + step):
-            file.write(line)
-            file.write("\r\n")
-    f = f + step
-    print(" > ci_full.ttl")
-    file.close()
-
-print("*****************************************")
-print("SUCCESS: closing script")
-print("*****************************************")
+if __name__ == "__main__":
+    main()
