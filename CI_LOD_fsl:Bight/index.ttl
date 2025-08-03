@@ -1,0 +1,13 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix void: <http://rdfs.org/ns/void#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://fuzzy-sl.squirrel.link/data/CI_LOD_fsl:Bight> a void:Linkset,
+        <http://www.w3.org/ns/ldp#Resource>,
+        <https://www.iana.org/assignments/media-types/text/turtle#Resource> ;
+    rdfs:label "Linkset: CI_LOD - fsl:Bight"@en ;
+    void:linkPredicate <http://fuzzy-sl.squirrel.link/ontology/spatialType> ;
+    void:objectsTarget <fsl:Bight> ;
+    void:subjectsTarget <http://fuzzy-sl.squirrel.link/data/CI_LOD> ;
+    void:triples 3 .
+

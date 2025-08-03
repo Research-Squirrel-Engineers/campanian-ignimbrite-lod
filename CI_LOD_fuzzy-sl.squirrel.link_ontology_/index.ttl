@@ -1,0 +1,16 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix void: <http://rdfs.org/ns/void#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://fuzzy-sl.squirrel.link/data/CI_LOD_fuzzy-sl.squirrel.link_ontology_> a void:Linkset,
+        <http://www.w3.org/ns/ldp#Resource>,
+        <https://www.iana.org/assignments/media-types/text/turtle#Resource> ;
+    rdfs:label "Linkset: CI_LOD - fsl:"@en ;
+    void:linkPredicate <http://fuzzy-sl.squirrel.link/ontology/partOf>,
+        <http://fuzzy-sl.squirrel.link/ontology/siteType>,
+        rdf:type ;
+    void:objectsTarget <http://fuzzy-sl.squirrel.link/ontology/> ;
+    void:subjectsTarget <http://fuzzy-sl.squirrel.link/data/CI_LOD> ;
+    void:triples 74 .
+
